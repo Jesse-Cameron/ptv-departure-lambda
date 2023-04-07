@@ -1,6 +1,9 @@
 use lambda_runtime::LambdaEvent;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use settings::Settings;
+
+mod settings;
 
 #[derive(Deserialize)]
 struct Request {}
@@ -25,23 +28,24 @@ type Response = Result<SuccessResponse, FailureResponse>;
 
 #[tokio::main]
 async fn main() -> Result<(), lambda_runtime::Error> {
-    let func = lambda_runtime::service_fn(|e| handler(e));
+    let settings = Settings::new()?;
+    let func = lambda_runtime::service_fn(|e| handler(e, settings.clone()));
     lambda_runtime::run(func).await?;
 
     Ok(())
 }
 
-async fn handler(_e: LambdaEvent<Request>) -> Response {
+async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
     let platform_one: u8 = 1;
     let platform_two: u8 = 2;
-    let api_value = "fake_key";
-    let developer_id: u32 = 1;
-    let uri: String = "http://timetableapi.ptv.vic.gov.au".to_string();
     let http_client = reqwest::Client::new();
+    let developer_id = settings.developer_id;
+    let uri = settings.uri;
+    let api_key = settings.api_key.as_bytes();
 
     let _req_to_city = create_request(
         &http_client,
-        api_value.as_bytes(),
+        api_key,
         developer_id,
         platform_one,
         uri.clone(),
@@ -50,16 +54,10 @@ async fn handler(_e: LambdaEvent<Request>) -> Response {
         body: format!("could not construct request to city. {}", err.to_string()),
     })?;
 
-    let _req_from_city = create_request(
-        &http_client,
-        api_value.as_bytes(),
-        developer_id,
-        platform_two,
-        uri,
-    )
-    .map_err(|err| FailureResponse {
-        body: format!("could not construct request from city. {}", err.to_string()),
-    })?;
+    let _req_from_city = create_request(&http_client, api_key, developer_id, platform_two, uri)
+        .map_err(|err| FailureResponse {
+            body: format!("could not construct request from city. {}", err.to_string()),
+        })?;
 
     Ok(SuccessResponse {})
 }

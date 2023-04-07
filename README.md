@@ -9,4 +9,11 @@ To run and test locally, make sure you have installed:
  - [rust](https://www.rust-lang.org/tools/install)
  - [cross](https://github.com/cross-rs/cross)
  - [aws-sam-cli](https://github.com/aws/aws-sam-cli)
- 
+
+#### Setup Config
+
+```sh
+cp ./env.json.example ./env.json
+```
+
+Update the values in `env.json` with the values provided by [PTV](https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/ptv-timetable-api/).

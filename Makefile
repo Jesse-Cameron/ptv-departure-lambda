@@ -9,11 +9,11 @@ build:
 
 .PHONY: start_api
 start_api:
-	sam local start-api -t ./template.yaml
+	sam local start-api -t ./template.yaml -n ./env.json
 
 .PHONY: invoke
 invoke:
-	sam local invoke -t ./template.yaml
+	sam local invoke -t ./template.yaml -n ./env.json
 
 .PHONY: test
 test:

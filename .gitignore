@@ -17,3 +17,7 @@ Cargo.lock
 # ignore cross build
 
 /build
+
+# ignore config files
+
+/env.json
