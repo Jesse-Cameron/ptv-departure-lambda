@@ -2,7 +2,9 @@ use lambda_runtime::LambdaEvent;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use settings::Settings;
+use tokio::try_join;
 
+mod ptv;
 mod settings;
 
 #[derive(Deserialize)]
@@ -43,7 +45,7 @@ async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
     let uri = settings.uri;
     let api_key = settings.api_key.as_bytes();
 
-    let _req_to_city = create_request(
+    let req_to_city = create_request(
         &http_client,
         api_key,
         developer_id,
@@ -54,10 +56,26 @@ async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
         body: format!("could not construct request to city. {}", err.to_string()),
     })?;
 
-    let _req_from_city = create_request(&http_client, api_key, developer_id, platform_two, uri)
+    let req_from_city = create_request(&http_client, api_key, developer_id, platform_two, uri)
         .map_err(|err| FailureResponse {
             body: format!("could not construct request from city. {}", err.to_string()),
         })?;
+
+    let (res_to_city, res_from_city) = try_join!(
+        http_client.execute(req_to_city),
+        http_client.execute(req_from_city)
+    )
+    .map_err(|err| FailureResponse {
+        body: format!("did not successfully complete request. {}", err.to_string()),
+    })?;
+
+    let (_res_body_1, _res_body_2) = try_join!(
+        res_to_city.json::<ptv::ViewDeparturesResponse>(),
+        res_from_city.json::<ptv::ViewDeparturesResponse>()
+    )
+    .map_err(|err| FailureResponse {
+        body: format!("could not read json response. {}", err.to_string()),
+    })?;
 
     Ok(SuccessResponse {})
 }
