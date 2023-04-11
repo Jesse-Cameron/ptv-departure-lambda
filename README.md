@@ -17,3 +17,13 @@ cp ./env.json.example ./env.json
 ```
 
 Update the values in `env.json` with the values provided by [PTV](https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/ptv-timetable-api/).
+
+
+#### Run Locally
+
+Once you have your environment setup, you can run the application locally with:
+
+```sh
+make build
+make invoke
+```

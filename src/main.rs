@@ -11,8 +11,16 @@ mod settings;
 #[derive(Deserialize)]
 struct Request {}
 
-#[derive(Serialize)]
-struct SuccessResponse {}
+#[derive(Debug, Serialize, PartialEq)]
+struct SuccessResponse {
+    pub to_city_departures: Vec<Departure>,
+    pub from_city_departures: Vec<Departure>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct Departure {
+    pub minutes: i64,
+}
 
 #[derive(Debug, Serialize)]
 struct FailureResponse {
@@ -70,6 +78,24 @@ async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
         body: format!("did not successfully complete request. {}", err.to_string()),
     })?;
 
+    if !res_to_city.status().is_success() {
+        return Err(FailureResponse {
+            body: format!(
+                "error response received from ptv. code: {}",
+                res_to_city.status().as_str(),
+            ),
+        });
+    }
+
+    if !res_from_city.status().is_success() {
+        return Err(FailureResponse {
+            body: format!(
+                "error response received from ptv. code: {}",
+                res_from_city.status().as_str(),
+            ),
+        });
+    }
+
     let (res_to_city, res_from_city) = try_join!(
         res_to_city.json::<ptv::ViewDeparturesResponse>(),
         res_from_city.json::<ptv::ViewDeparturesResponse>()
@@ -78,17 +104,20 @@ async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
         body: format!("could not read json response. {}", err.to_string()),
     })?;
 
-    let _from_city_minutes =
+    let from_city_departures =
         get_departure_minutes_from_response(res_from_city).map_err(|err| FailureResponse {
             body: format!("could not get departure minutes. {}", err.to_string()),
         })?;
 
-    let _to_city_minutes =
+    let to_city_departures =
         get_departure_minutes_from_response(res_to_city).map_err(|err| FailureResponse {
             body: format!("could not get departure minutes. {}", err.to_string()),
         })?;
 
-    Ok(SuccessResponse {})
+    Ok(SuccessResponse {
+        to_city_departures,
+        from_city_departures,
+    })
 }
 
 fn create_request(
@@ -122,7 +151,7 @@ fn create_request(
     Ok(res)
 }
 
-type MaybeDepartureMins = Result<(i64, Option<i64>), Box<dyn std::error::Error>>;
+type MaybeDepartureMins = Result<Vec<Departure>, Box<dyn std::error::Error>>;
 
 fn get_departure_minutes_from_response(
     response: ptv::ViewDeparturesResponse,
@@ -138,7 +167,15 @@ fn get_departure_minutes_from_response(
         .map(|d| get_minutes_from_departure(d.clone()).ok())
         .flatten();
 
-    Ok((first_time, second_time))
+    let mut departures = vec![Departure {
+        minutes: first_time,
+    }];
+
+    if let Some(minutes) = second_time {
+        departures.push(Departure { minutes });
+    }
+
+    Ok(departures)
 }
 
 fn get_minutes_from_departure(
@@ -158,8 +195,9 @@ fn get_minutes_from_departure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ptv::Departure;
     use chrono::Duration;
+    use lambda_runtime::Context;
+    use serde_json::{self, json};
 
     #[test]
     fn test_create_successful_request() {
@@ -182,7 +220,7 @@ mod tests {
 
         for (future_secs, expected_mins) in tests {
             let test_time = Utc::now() + Duration::seconds(future_secs);
-            let test_departure = Departure {
+            let test_departure = ptv::Departure {
                 scheduled_departure_utc: Some(
                     test_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 ),
@@ -198,7 +236,7 @@ mod tests {
     fn test_get_minutes_from_response_prioritise_estimated() {
         let test_time_1 = Utc::now() + Duration::seconds(60);
         let test_time_2 = Utc::now() + Duration::seconds(130);
-        let test_departure = Departure {
+        let test_departure = ptv::Departure {
             scheduled_departure_utc: Some(
                 test_time_1.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
@@ -215,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_get_minutes_for_responses_empty() {
-        let test_departure = Departure {
+        let test_departure = ptv::Departure {
             estimated_departure_utc: None,
             scheduled_departure_utc: None,
             ..Default::default()
@@ -245,7 +283,7 @@ mod tests {
                         },
                     ],
                 },
-                Ok((8, None)),
+                Ok(vec![Departure { minutes: 8 }]),
             ),
             (
                 ptv::ViewDeparturesResponse {
@@ -254,7 +292,7 @@ mod tests {
                         departure_in(Duration::minutes(8)),
                     ],
                 },
-                Ok((2, Some(7))),
+                Ok(vec![Departure { minutes: 2 }, Departure { minutes: 7 }]),
             ),
             (
                 ptv::ViewDeparturesResponse {
@@ -287,5 +325,77 @@ mod tests {
             ),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn test_handler() {
+        // arrange
+        let departure_time_1 = Utc::now()
+            .checked_add_signed(Duration::minutes(2) + Duration::seconds(10))
+            .unwrap();
+        let departure_time_2 = Utc::now().checked_add_signed(Duration::minutes(5)).unwrap();
+        let example_response_body_1 = create_example_response(departure_time_1, departure_time_2);
+        let example_response_body_2 = create_example_response(departure_time_2, departure_time_1);
+
+        let mut server = mockito::Server::new_async().await;
+
+        let _m = server
+            .mock("GET", "/v3/departures/route_type/0/stop/1170")
+            .match_query(mockito::Matcher::Regex(
+                "platform=1&max_results=2&include_cancelled=false&devid=1&signature=*".into(),
+            ))
+            .with_body(example_response_body_1)
+            .create_async()
+            .await;
+
+        let _m = server
+            .mock("GET", "/v3/departures/route_type/0/stop/1170")
+            .match_query(mockito::Matcher::Regex(
+                "platform=2&max_results=2&include_cancelled=false&devid=1&signature=*".into(),
+            ))
+            .with_body(example_response_body_2)
+            .create_async()
+            .await;
+
+        let settings = Settings {
+            uri: server.url(),
+            api_key: "".to_string(),
+            developer_id: 1,
+        };
+
+        let event = LambdaEvent::new(Request {}, Context::default());
+
+        // act
+        let response = handler(event, settings).await.unwrap();
+
+        // assert
+        let expected_response = SuccessResponse {
+            to_city_departures: vec![Departure { minutes: 2 }, Departure { minutes: 4 }],
+            from_city_departures: vec![Departure { minutes: 4 }, Departure { minutes: 2 }],
+        };
+        assert_eq!(response, expected_response);
+    }
+
+    fn create_example_response(
+        departure_time_1: DateTime<Utc>,
+        departure_time_2: DateTime<Utc>,
+    ) -> String {
+        let j = json!(
+            {
+                "departures": [
+                    {
+                        "scheduled_departure_utc": departure_time_1.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        "estimated_departure_utc": departure_time_1.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        "at_platform": false
+                    },
+                    {
+                        "scheduled_departure_utc": departure_time_2.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        "estimated_departure_utc": null,
+                        "at_platform": false
+                    }
+                ],
+            }
+        );
+        j.to_string()
     }
 }
