@@ -12,7 +12,15 @@ mod settings;
 struct Request {}
 
 #[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 struct SuccessResponse {
+    pub status_code: u32,
+    pub body: StationDepartures,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct StationDepartures {
     pub to_city_departures: Vec<Departure>,
     pub from_city_departures: Vec<Departure>,
 }
@@ -115,8 +123,11 @@ async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
         })?;
 
     Ok(SuccessResponse {
-        to_city_departures,
-        from_city_departures,
+        status_code: 200,
+        body: StationDepartures {
+            to_city_departures,
+            from_city_departures,
+        },
     })
 }
 
@@ -372,8 +383,11 @@ mod tests {
 
         // assert
         let expected_response = SuccessResponse {
-            to_city_departures: vec![Departure { minutes: 2 }, Departure { minutes: 4 }],
-            from_city_departures: vec![Departure { minutes: 4 }, Departure { minutes: 2 }],
+            status_code: 200,
+            body: StationDepartures {
+                to_city_departures: vec![Departure { minutes: 2 }, Departure { minutes: 4 }],
+                from_city_departures: vec![Departure { minutes: 4 }, Departure { minutes: 2 }],
+            },
         };
         assert_eq!(response, expected_response);
     }
