@@ -7,14 +7,23 @@ use tokio::try_join;
 
 mod ptv;
 mod settings;
+mod stations;
 
 #[derive(Deserialize)]
-struct Request {}
+#[serde(rename_all = "camelCase")]
+struct Request {
+    pub query_string_parameters: Option<QueryParams>,
+}
+
+#[derive(Deserialize)]
+struct QueryParams {
+    pub station_name: Option<String>,
+}
 
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct SuccessResponse {
-    pub status_code: u32,
+    pub status_code: u16,
     pub body: StationDepartures,
 }
 
@@ -54,29 +63,49 @@ async fn main() -> Result<(), lambda_runtime::Error> {
     Ok(())
 }
 
-async fn handler(_e: LambdaEvent<Request>, settings: Settings) -> Response {
+async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
     let platform_one: u8 = 1;
     let platform_two: u8 = 2;
     let http_client = reqwest::Client::new();
     let developer_id = settings.developer_id;
     let uri = settings.uri;
     let api_key = settings.api_key.as_bytes();
+    let station = e
+        .payload
+        .query_string_parameters
+        .and_then(|params| params.station_name)
+        .ok_or_else(|| FailureResponse {
+            body: "no station provided in request".to_string(),
+        })?;
+
+    let stop_id =
+        stations::get_stop_id_from_name(station.as_str()).ok_or_else(|| FailureResponse {
+            body: format!("station: {} is not supported", station),
+        })?;
 
     let req_to_city = create_request(
         &http_client,
         api_key,
         developer_id,
         platform_one,
+        stop_id,
         uri.clone(),
     )
     .map_err(|err| FailureResponse {
         body: format!("could not construct request to city. {}", err.to_string()),
     })?;
 
-    let req_from_city = create_request(&http_client, api_key, developer_id, platform_two, uri)
-        .map_err(|err| FailureResponse {
-            body: format!("could not construct request from city. {}", err.to_string()),
-        })?;
+    let req_from_city = create_request(
+        &http_client,
+        api_key,
+        developer_id,
+        platform_two,
+        stop_id,
+        uri,
+    )
+    .map_err(|err| FailureResponse {
+        body: format!("could not construct request from city. {}", err.to_string()),
+    })?;
 
     let (res_to_city, res_from_city) = try_join!(
         http_client.execute(req_to_city),
@@ -136,10 +165,10 @@ fn create_request(
     api_key: &[u8],
     developer_id: u32,
     platform_id: u8,
+    stop_id: u32,
     uri: String,
 ) -> Result<reqwest::Request, Box<dyn std::error::Error>> {
     let route_type: u8 = 0; // 0 = train
-    let stop_id: u16 = 1170; // TODO: fetch the stop id from a stop name, hardcode to rushall station for now
     let max_departures: u8 = 2; // we only want the next two departures
 
     let path = format!(
@@ -215,7 +244,7 @@ mod tests {
         let http_client = reqwest::Client::new();
         let api_key: &[u8] = b"9c132d31-6a30-4cac-8d8b-8a1970834799"; // fake key
         let uri = "http://example.com";
-        let res = create_request(&http_client, api_key, 32, 1, uri.to_string()).unwrap();
+        let res = create_request(&http_client, api_key, 32, 1, 1170, uri.to_string()).unwrap();
         assert_eq!(res.url().as_str(), "http://example.com/v3/departures/route_type/0/stop/1170?platform_numbers=1&max_results=2&include_cancelled=false&devid=32&signature=234004d132ed696e31cbb23f703743df0f2d7ae3")
     }
 
@@ -376,7 +405,14 @@ mod tests {
             developer_id: 1,
         };
 
-        let event = LambdaEvent::new(Request {}, Context::default());
+        let event = LambdaEvent::new(
+            Request {
+                query_string_parameters: Some(QueryParams {
+                    station_name: Some("rushall".to_string()),
+                }),
+            },
+            Context::default(),
+        );
 
         // act
         let response = handler(event, settings).await.unwrap();

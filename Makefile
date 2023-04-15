@@ -13,7 +13,7 @@ start_api:
 
 .PHONY: invoke
 invoke:
-	sam local invoke -t ./template.yaml -n ./env.json
+	sam local invoke -t ./template.yaml -n ./env.json -e ./example_event.json
 
 .PHONY: test
 test:

@@ -27,3 +27,11 @@ Once you have your environment setup, you can run the application locally with:
 make build
 make invoke
 ```
+
+If you want to run a local server you can via:
+
+```sh
+make build
+make start_api
+curl "localhost:3000/departures?station_name=clifton_hill" 
+```
