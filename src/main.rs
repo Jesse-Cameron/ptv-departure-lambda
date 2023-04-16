@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use lambda_runtime::LambdaEvent;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 use tokio::try_join;
@@ -106,49 +107,10 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         body: format!("could not construct request from city. {}", err.to_string()),
     })?;
 
-    let (res_to_city, res_from_city) = try_join!(
-        http_client.execute(req_to_city),
-        http_client.execute(req_from_city)
-    )
-    .map_err(|err| FailureResponse {
-        body: format!("did not successfully complete request. {}", err.to_string()),
-    })?;
-
-    if !res_to_city.status().is_success() {
-        return Err(FailureResponse {
-            body: format!(
-                "error response received from ptv. code: {}",
-                res_to_city.status().as_str(),
-            ),
-        });
-    }
-
-    if !res_from_city.status().is_success() {
-        return Err(FailureResponse {
-            body: format!(
-                "error response received from ptv. code: {}",
-                res_from_city.status().as_str(),
-            ),
-        });
-    }
-
-    let (json_to_city, json_from_city) = try_join!(
-        res_to_city.json::<ptv::ViewDeparturesResponse>(),
-        res_from_city.json::<ptv::ViewDeparturesResponse>()
-    )
-    .map_err(|err| FailureResponse {
-        body: format!("could not read json response. {}", err.to_string()),
-    })?;
-
-    let from_city_departures =
-        get_departure_minutes_from_response(json_from_city).map_err(|err| FailureResponse {
-            body: format!("could not get departure minutes. {}", err.to_string()),
-        })?;
-
-    let to_city_departures =
-        get_departure_minutes_from_response(json_to_city).map_err(|err| FailureResponse {
-            body: format!("could not get departure minutes. {}", err.to_string()),
-        })?;
+    let (to_city_departures, from_city_departures) = try_join!(
+        dispatch_and_parse_request(req_to_city, &http_client),
+        dispatch_and_parse_request(req_from_city, &http_client)
+    )?;
 
     Ok(SuccessResponse {
         status_code: 200,
@@ -156,6 +118,38 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
             to_city_departures,
             from_city_departures,
         },
+    })
+}
+
+async fn dispatch_and_parse_request(
+    request: reqwest::Request,
+    client: &Client,
+) -> Result<Vec<Departure>, FailureResponse> {
+    let res = client.execute(request).await.map_err(|e| FailureResponse {
+        body: format!("failed to send request: err {}", e),
+    })?;
+
+    if !res.status().is_success() {
+        return Err(FailureResponse {
+            body: format!(
+                "error response received from ptv. code: {}",
+                res.status().as_str(),
+            ),
+        });
+    }
+
+    let json = res
+        .json::<ptv::ViewDeparturesResponse>()
+        .await
+        .map_err(|err| FailureResponse {
+            body: format!("could not read json response. {}", err.to_string()),
+        })?;
+
+    get_departure_minutes_from_response(json).map_err(|err| FailureResponse {
+        body: format!(
+            "could not get departure minutes from request. {}",
+            err.to_string()
+        ),
     })
 }
 
