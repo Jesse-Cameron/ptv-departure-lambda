@@ -1,4 +1,16 @@
-# ptv-departure-lambda
+## `ptv-departure-lambda`
+
+This project is a rust lambda for requesting the next two departures times for a single station in the PTV network. Currently only the Mernda train line is supported.
+
+Example:
+
+```sh
+$ curl "localhost:3000/departures?station_name=clifton_hill"
+{
+    "toCityDepartures": [{ "minutes": 9 }, { "minutes": 27 }],
+    "fromCityDepartures": [{ "minutes": 26 }, { "minutes": 56 }]
+}
+```
 
 ### Local Development
 
