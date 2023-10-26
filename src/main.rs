@@ -92,7 +92,7 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         uri.clone(),
     )
     .map_err(|err| FailureResponse {
-        body: format!("could not construct request to city. {}", err.to_string()),
+        body: format!("could not construct request to city. {}", err),
     })?;
 
     let req_from_city = ptv::create_view_departures_request(
@@ -104,7 +104,7 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         uri,
     )
     .map_err(|err| FailureResponse {
-        body: format!("could not construct request from city. {}", err.to_string()),
+        body: format!("could not construct request from city. {}", err),
     })?;
 
     let (to_city_departures, from_city_departures) = try_join!(
@@ -142,14 +142,11 @@ async fn dispatch_and_parse_request(
         .json::<ptv::ViewDeparturesResponse>()
         .await
         .map_err(|err| FailureResponse {
-            body: format!("could not read json response. {}", err.to_string()),
+            body: format!("could not read json response. {}", err),
         })?;
 
     get_departure_minutes_from_response(json).map_err(|err| FailureResponse {
-        body: format!(
-            "could not get departure minutes from request. {}",
-            err.to_string()
-        ),
+        body: format!("could not get departure minutes from request. {}", err),
     })
 }
 
@@ -166,8 +163,7 @@ fn get_departure_minutes_from_response(
         .get(1)
         // note: we'll swallow an error here, in favour of returning the first departure time
         // in the future we might want to log/handle this better?
-        .map(|d| get_minutes_from_departure(d.clone()).ok())
-        .flatten();
+        .and_then(|d| get_minutes_from_departure(d.clone()).ok());
 
     let mut departures = vec![Departure {
         minutes: first_time,

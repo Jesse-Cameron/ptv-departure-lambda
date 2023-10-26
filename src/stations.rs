@@ -33,5 +33,5 @@ pub static STATIONS_MAP: phf::Map<&'static str, u32> = phf_map! {
 };
 
 pub fn get_stop_id_from_name(station: &str) -> Option<u32> {
-    STATIONS_MAP.get(station).map(|v| v.clone())
+    STATIONS_MAP.get(station).copied()
 }

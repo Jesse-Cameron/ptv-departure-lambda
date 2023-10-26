@@ -29,7 +29,7 @@ where
     if s.is_empty() {
         return Err(de::Error::custom("field is empty"));
     }
-    u32::from_str_radix(&s, 10).map_err(de::Error::custom)
+    s.parse::<u32>().map_err(de::Error::custom)
 }
 
 #[cfg(test)]
