@@ -9,6 +9,17 @@ mod ptv;
 mod settings;
 mod stations;
 
+macro_rules! error_resp {
+    ($code:expr, $err:expr) => {
+        SuccessResponse {
+            status_code: $code,
+            body: Body::Fail(ErrorBody {
+                error_message: $err.to_string(),
+            }),
+        }
+    };
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
@@ -24,12 +35,19 @@ struct QueryParams {
 #[serde(rename_all = "camelCase")]
 struct SuccessResponse {
     pub status_code: u16,
-    pub body: StationDepartures,
+    pub body: Body,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(untagged)]
+enum Body {
+    Success(SuccessBody),
+    Fail(ErrorBody),
 }
 
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct StationDepartures {
+struct SuccessBody {
     pub to_city_departures: Vec<Departure>,
     pub from_city_departures: Vec<Departure>,
 }
@@ -39,24 +57,21 @@ struct Departure {
     pub minutes: i64,
 }
 
-#[derive(Debug, Serialize)]
-struct FailureResponse {
-    pub body: String,
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ErrorBody {
+    // pub error_type: String,
+    pub error_message: String,
 }
 
-impl std::fmt::Display for FailureResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.body)
-    }
-}
-
-impl std::error::Error for FailureResponse {}
-
-type Response = Result<SuccessResponse, FailureResponse>;
+type Response = Result<SuccessResponse, Box<dyn std::error::Error>>;
 
 #[tokio::main]
 async fn main() -> Result<(), lambda_runtime::Error> {
     let settings = Settings::new()?;
+    // note: we need to makes sure that the handler that returns an error
+    // doesn't actually fail, it should just return a response with a 5xx/4xx code
+    // https://github.com/awslabs/aws-lambda-rust-runtime/issues/355
     let func = lambda_runtime::service_fn(|e| handler(e, settings.clone()));
     lambda_runtime::run(func).await?;
 
@@ -70,18 +85,26 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
     let developer_id = settings.developer_id;
     let uri = settings.uri;
     let api_key = settings.api_key.as_bytes();
+
     let station = e
         .payload
         .query_string_parameters
-        .and_then(|params| params.station_name)
-        .ok_or_else(|| FailureResponse {
-            body: "no station provided in request".to_string(),
-        })?;
+        .and_then(|params| params.station_name);
+    let station = match station {
+        Some(station) => station,
+        None => return Ok(error_resp!(400, "no station provided in request")),
+    };
 
-    let stop_id =
-        stations::get_stop_id_from_name(station.as_str()).ok_or_else(|| FailureResponse {
-            body: format!("station: {} is not supported", station),
-        })?;
+    let stop_id = stations::get_stop_id_from_name(station.as_str());
+    let stop_id = match stop_id {
+        Some(stop_id) => stop_id,
+        None => {
+            return Ok(error_resp!(
+                404,
+                format!("station: {} is not found", station)
+            ))
+        }
+    };
 
     let req_to_city = ptv::create_view_departures_request(
         &http_client,
@@ -90,10 +113,16 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         platform_one,
         stop_id,
         uri.clone(),
-    )
-    .map_err(|err| FailureResponse {
-        body: format!("could not construct request to city. {}", err),
-    })?;
+    );
+    let req_to_city = match req_to_city {
+        Ok(req_to_city) => req_to_city,
+        Err(err) => {
+            return Ok(error_resp!(
+                500,
+                format!("could not construct request to city. {}", err)
+            ))
+        }
+    };
 
     let req_from_city = ptv::create_view_departures_request(
         &http_client,
@@ -102,52 +131,79 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         platform_two,
         stop_id,
         uri,
-    )
-    .map_err(|err| FailureResponse {
-        body: format!("could not construct request from city. {}", err),
-    })?;
+    );
+    let req_from_city = match req_from_city {
+        Ok(req_from_city) => req_from_city,
+        Err(err) => {
+            return Ok(error_resp!(
+                500,
+                format!("could not construct request from city. {}", err)
+            ))
+        }
+    };
 
-    let (to_city_departures, from_city_departures) = try_join!(
+    let (to_city_departures, from_city_departures) = match try_join!(
         dispatch_and_parse_request(req_to_city, &http_client),
         dispatch_and_parse_request(req_from_city, &http_client)
-    )?;
+    ) {
+        Ok((to_city_departures, from_city_departures)) => {
+            (to_city_departures, from_city_departures)
+        }
+        Err(err) => return Ok(err),
+    };
 
     Ok(SuccessResponse {
         status_code: 200,
-        body: StationDepartures {
+        body: Body::Success(SuccessBody {
             to_city_departures,
             from_city_departures,
-        },
+        }),
     })
 }
 
 async fn dispatch_and_parse_request(
     request: reqwest::Request,
     client: &Client,
-) -> Result<Vec<Departure>, FailureResponse> {
-    let res = client.execute(request).await.map_err(|e| FailureResponse {
-        body: format!("failed to send request: err {}", e),
-    })?;
+) -> Result<Vec<Departure>, SuccessResponse> {
+    let res = client.execute(request).await;
+    let res = match res {
+        Ok(res) => res,
+        Err(err) => return Err(error_resp!(500, format!("failed to send request: {}", err))),
+    };
 
     if !res.status().is_success() {
-        return Err(FailureResponse {
-            body: format!(
+        return Err(error_resp!(
+            424,
+            format!(
                 "error response received from ptv. code: {}",
-                res.status().as_str(),
-            ),
-        });
+                res.status().as_str()
+            )
+        ));
     }
 
-    let json = res
-        .json::<ptv::ViewDeparturesResponse>()
-        .await
-        .map_err(|err| FailureResponse {
-            body: format!("could not read json response. {}", err),
-        })?;
+    let json = res.json::<ptv::ViewDeparturesResponse>().await;
 
-    get_departure_minutes_from_response(json).map_err(|err| FailureResponse {
-        body: format!("could not get departure minutes from request. {}", err),
-    })
+    let json = match json {
+        Ok(json) => json,
+        Err(err) => {
+            return Err(error_resp!(
+                500,
+                format!("failed to read json response: {}", err)
+            ))
+        }
+    };
+
+    let minutes = get_departure_minutes_from_response(json);
+    let minutes = match minutes {
+        Ok(minutes) => minutes,
+        Err(err) => {
+            return Err(error_resp!(
+                500,
+                format!("could not get departure minutes from request. {}", err)
+            ))
+        }
+    };
+    Ok(minutes)
 }
 
 type MaybeDepartureMins = Result<Vec<Departure>, Box<dyn std::error::Error>>;
@@ -161,19 +217,22 @@ fn get_departure_minutes_from_response(
     let second_time = response
         .departures
         .get(1)
-        // note: we'll swallow an error here, in favour of returning the first departure time
-        // in the future we might want to log/handle this better?
+        // note: we'll not log any err Results here, in favour of returning the
+        // first departure time. in the future we might want to log this?
         .and_then(|d| get_minutes_from_departure(d.clone()).ok());
 
-    let mut departures = vec![Departure {
-        minutes: first_time,
-    }];
-
     if let Some(minutes) = second_time {
-        departures.push(Departure { minutes });
+        Ok(vec![
+            Departure {
+                minutes: first_time,
+            },
+            Departure { minutes },
+        ])
+    } else {
+        Ok(vec![Departure {
+            minutes: first_time,
+        }])
     }
-
-    Ok(departures)
 }
 
 fn get_minutes_from_departure(
@@ -369,10 +428,10 @@ mod tests {
         // assert
         let expected_response = SuccessResponse {
             status_code: 200,
-            body: StationDepartures {
+            body: Body::Success(SuccessBody {
                 to_city_departures: vec![Departure { minutes: 2 }, Departure { minutes: 4 }],
                 from_city_departures: vec![Departure { minutes: 4 }, Departure { minutes: 2 }],
-            },
+            }),
         };
         assert_eq!(response, expected_response);
     }
