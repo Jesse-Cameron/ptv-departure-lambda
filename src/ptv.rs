@@ -28,7 +28,7 @@ pub fn create_view_departures_request(
         route_type, stop_id, platform_id, max_departures, developer_id
     );
 
-    let signature_bytes = hmacsha1::hmac_sha1(api_key, path.as_bytes());
+    let signature_bytes = hmac_sha1::hmac_sha1(api_key, path.as_bytes());
     // convert signature bytes into a utf8 string
     let signature = signature_bytes
         .iter()

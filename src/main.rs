@@ -251,10 +251,13 @@ fn get_minutes_from_departure(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use chrono::Duration;
-    use lambda_runtime::Context;
+    use http::{self, HeaderMap, HeaderValue};
+    use lambda_runtime::{Config, Context};
     use serde_json::{self, json};
+    use std::sync::Arc;
 
     #[test]
     fn test_get_minutes_from_response_calc() {
@@ -413,13 +416,18 @@ mod tests {
             developer_id: 1,
         };
 
+        let mut headers = HeaderMap::new();
+        headers.append("lambda-runtime-deadline-ms", HeaderValue::from_static("1000"));
+
+        let ctx = Context::new("default", Arc::new(Config::default()), &headers.clone()).unwrap();
+
         let event = LambdaEvent::new(
             Request {
                 query_string_parameters: Some(QueryParams {
                     station_name: Some("rushall".to_string()),
                 }),
             },
-            Context::default(),
+            ctx,
         );
 
         // act
