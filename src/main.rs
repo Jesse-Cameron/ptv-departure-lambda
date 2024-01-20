@@ -11,7 +11,7 @@ mod stations;
 
 macro_rules! error_resp {
     ($code:expr, $err:expr) => {
-        SuccessResponse {
+        HttpResponse {
             status_code: $code,
             body: Body::Fail(ErrorBody {
                 error_message: $err.to_string(),
@@ -33,42 +33,52 @@ struct QueryParams {
 
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct SuccessResponse {
+struct HttpResponse {
     pub status_code: u16,
     pub body: Body,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(untagged)]
+#[serde(into = "String")]
 enum Body {
     Success(SuccessBody),
     Fail(ErrorBody),
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+impl From<Body> for String {
+    fn from(body: Body) -> Self {
+        match body {
+            Body::Success(success_body) => serde_json::to_string(&success_body).unwrap(),
+            Body::Fail(error_body) => serde_json::to_string(&error_body).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct SuccessBody {
     pub to_city_departures: Vec<Departure>,
     pub from_city_departures: Vec<Departure>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 struct Departure {
     pub minutes: i64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ErrorBody {
     pub error_message: String,
 }
 
-type Response = Result<SuccessResponse, Box<dyn std::error::Error>>;
+type Response = Result<HttpResponse, Box<dyn std::error::Error>>;
 
 #[tokio::main]
 async fn main() -> Result<(), lambda_runtime::Error> {
     let settings = Settings::new()?;
-    // note: we need to makes sure that the handler that returns an error
+    // note: we need to make sure that the handler that returns an error that
     // doesn't actually fail, it should just return a response with a 5xx/4xx code
     // https://github.com/awslabs/aws-lambda-rust-runtime/issues/355
     let func = lambda_runtime::service_fn(|e| handler(e, settings.clone()));
@@ -151,7 +161,7 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
         Err(err) => return Ok(err),
     };
 
-    Ok(SuccessResponse {
+    Ok(HttpResponse {
         status_code: 200,
         body: Body::Success(SuccessBody {
             to_city_departures,
@@ -163,7 +173,7 @@ async fn handler(e: LambdaEvent<Request>, settings: Settings) -> Response {
 async fn dispatch_and_parse_request(
     request: reqwest::Request,
     client: &Client,
-) -> Result<Vec<Departure>, SuccessResponse> {
+) -> Result<Vec<Departure>, HttpResponse> {
     let res = client.execute(request).await;
     let res = match res {
         Ok(res) => res,
@@ -416,7 +426,10 @@ mod tests {
         };
 
         let mut headers = HeaderMap::new();
-        headers.append("lambda-runtime-deadline-ms", HeaderValue::from_static("1000"));
+        headers.append(
+            "lambda-runtime-deadline-ms",
+            HeaderValue::from_static("1000"),
+        );
 
         let ctx = Context::new("default", Arc::new(Config::default()), &headers.clone()).unwrap();
 
@@ -433,7 +446,7 @@ mod tests {
         let response = handler(event, settings).await.unwrap();
 
         // assert
-        let expected_response = SuccessResponse {
+        let expected_response = HttpResponse {
             status_code: 200,
             body: Body::Success(SuccessBody {
                 to_city_departures: vec![Departure { minutes: 2 }, Departure { minutes: 4 }],
