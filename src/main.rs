@@ -60,7 +60,6 @@ struct Departure {
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ErrorBody {
-    // pub error_type: String,
     pub error_message: String,
 }
 
@@ -211,7 +210,7 @@ type MaybeDepartureMins = Result<Vec<Departure>, Box<dyn std::error::Error>>;
 fn get_departure_minutes_from_response(
     response: ptv::ViewDeparturesResponse,
 ) -> MaybeDepartureMins {
-    let first_departure = response.departures.get(0).ok_or("no departures found")?;
+    let first_departure = response.departures.first().ok_or("no departures found")?;
     let first_time = get_minutes_from_departure(first_departure.clone())?;
 
     let second_time = response

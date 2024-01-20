@@ -15,6 +15,10 @@ start_api:
 check:
 	cross check --target $(ARCH)
 
+.PHONY: fmt
+fmt:
+	cargo fmt
+
 .PHONY: lint
 lint:
 	cargo clippy

@@ -45,5 +45,5 @@ If you want to run a local server you can via:
 ```sh
 make build
 make start_api
-curl "localhost:3000/departures?station_name=clifton_hill" 
+curl "localhost:3000/departures?station_name=clifton_hill"
 ```
