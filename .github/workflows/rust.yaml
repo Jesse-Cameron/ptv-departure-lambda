@@ -1,0 +1,39 @@
+name: rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: install cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
+    - name: tests
+      run: make test
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v3
+    - name: install cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
+    - name: build
+      run: make build
+    - uses: actions/setup-python@v2
+    - uses: aws-actions/setup-sam@v1
+    - uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-southeast-2
+    - name: deploy
+      run: sam deploy --parameter-overrides "AppApiKey=\"${{ secrets.PTV_API_KEY }}\" AppDeveloperId=\"${{ secrets.PTV_DEVELOPER_ID }}\""
