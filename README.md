@@ -5,7 +5,7 @@ This project is a rust lambda for requesting the next two departures times for a
 Example:
 
 ```sh
-$ curl "localhost:3000/departures?station_name=clifton_hill"
+$ curl -H "x-api-key: ${API_KEY}" '${API_ENDPOINT}?station_name=clifton_hill'
 {
     "toCityDepartures": [{ "minutes": 9 }, { "minutes": 27 }],
     "fromCityDepartures": [{ "minutes": 26 }, { "minutes": 56 }]
